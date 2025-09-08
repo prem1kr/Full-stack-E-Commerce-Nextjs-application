@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 
 const OrderSummary = () => {
-  const { currency, router, getCartCount, getCartAmount, setCartItems } = useAppContext();
+  const { currency, router, cartItems, products } = useAppContext();
 
   const [selectedAddress, setSelectedAddress] = useState(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -12,7 +12,20 @@ const OrderSummary = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [promoCode, setPromoCode] = useState("");
-  const [cartItemsFromStorage, setCartItemsFromStorage] = useState([]);
+
+  // Create reactive cart array from context
+  const cartItemsArray = Object.keys(cartItems)
+    .map((id) => {
+      const product = products.find((p) => p._id === id);
+      if (!product || cartItems[id] <= 0) return null;
+      return { ...product, quantity: cartItems[id] };
+    })
+    .filter(Boolean);
+
+  const itemsCount = cartItemsArray.reduce((acc, item) => acc + item.quantity, 0);
+  const subtotal = cartItemsArray.reduce((acc, item) => acc + item.offerPrice * item.quantity, 0);
+  const tax = Math.floor(subtotal * 0.02);
+  const total = subtotal + tax;
 
   // 📌 Select address from dropdown
   const handleAddressSelect = (address) => {
@@ -24,7 +37,6 @@ const OrderSummary = () => {
   const fetchUserAddresses = async () => {
     try {
       const userId = typeof window !== "undefined" ? localStorage.getItem("userId") : null;
-
       if (!userId) {
         setError("User not logged in.");
         setLoading(false);
@@ -32,12 +44,9 @@ const OrderSummary = () => {
       }
 
       const { data } = await axios.get(`/api/address?userId=${userId}`);
-
       if (data.success) {
         setUserAddresses(data.addresses);
-        if (data.addresses.length > 0) {
-          setSelectedAddress(data.addresses[0]);
-        }
+        if (data.addresses.length > 0) setSelectedAddress(data.addresses[0]);
       } else {
         setError(data.error || "Failed to fetch addresses.");
       }
@@ -52,30 +61,12 @@ const OrderSummary = () => {
     }
   };
 
-  // 📌 Load cart items from localStorage
-  const loadCartItems = () => {
-    const cart = JSON.parse(localStorage.getItem("cartItems") || "[]");
-    setCartItemsFromStorage(cart);
-  };
-
   // 📌 Create order
   const createOrder = async () => {
-    if (!selectedAddress) {
-      alert("Please select an address before placing order.");
-      return;
-    }
-
+    if (!selectedAddress) return alert("Please select an address before placing order.");
     const userId = typeof window !== "undefined" ? localStorage.getItem("userId") : null;
-
-    if (!userId) {
-      alert("User not logged in.");
-      return;
-    }
-
-    if (!cartItemsFromStorage.length) {
-      alert("Cart is empty.");
-      return;
-    }
+    if (!userId) return alert("User not logged in.");
+    if (!cartItemsArray.length) return alert("Cart is empty.");
 
     try {
       const orderData = {
@@ -88,34 +79,20 @@ const OrderSummary = () => {
           state: selectedAddress.state,
           phoneNumber: selectedAddress.phoneNumber,
         },
-        items: cartItemsFromStorage.map((item) => ({
+        items: cartItemsArray.map((item) => ({
           product: { name: item.name },
           quantity: item.quantity,
         })),
-        itemsCount: cartItemsFromStorage.reduce((acc, item) => acc + item.quantity, 0),
-        totalAmount:
-          cartItemsFromStorage.reduce((acc, item) => acc + item.price * item.quantity, 0) +
-          Math.floor(
-            cartItemsFromStorage.reduce((acc, item) => acc + item.price * item.quantity, 0) * 0.02
-          ),
+        itemsCount,
+        totalAmount: total,
         promoCode: promoCode || null,
         paymentMethod: "COD",
       };
 
       const response = await axios.post("/api/order", orderData);
-
       if (response.data.success) {
-        // Clear local storage
         localStorage.removeItem("cartItems");
-
-        
-
-        // Clear cart in database
-        await axios.post("/api/cart", {
-          userId,
-          items: [], // empty array to clear cart
-        });
-
+        await axios.post("/api/cart", { userId, items: [] });
         router.push("/order-placed");
       } else {
         alert(response.data.error || "Failed to place order.");
@@ -128,7 +105,6 @@ const OrderSummary = () => {
 
   useEffect(() => {
     fetchUserAddresses();
-    loadCartItems();
   }, []);
 
   return (
@@ -141,9 +117,7 @@ const OrderSummary = () => {
       <div className="space-y-6">
         {/* 📌 Address selection */}
         <div>
-          <label className="text-base font-medium uppercase text-gray-600 block mb-2">
-            Select Address
-          </label>
+          <label className="text-base font-medium uppercase text-gray-600 block mb-2">Select Address</label>
           <div className="relative inline-block w-full text-sm border">
             <button
               className="peer w-full text-left px-4 pr-2 py-2 bg-white text-gray-700 focus:outline-none"
@@ -157,9 +131,7 @@ const OrderSummary = () => {
                   : "Select Address"}
               </span>
               <svg
-                className={`w-5 h-5 inline float-right transition-transform duration-200 ${
-                  isDropdownOpen ? "rotate-180" : "rotate-0"
-                }`}
+                className={`w-5 h-5 inline float-right transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : "rotate-0"}`}
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
@@ -219,13 +191,8 @@ const OrderSummary = () => {
         {/* 📌 Summary */}
         <div className="space-y-4">
           <div className="flex justify-between text-base font-medium">
-            <p className="uppercase text-gray-600">
-              Items {cartItemsFromStorage.reduce((acc, item) => acc + item.quantity, 0)}
-            </p>
-            <p className="text-gray-800">
-              {currency}
-              {cartItemsFromStorage.reduce((acc, item) => acc + item.price * item.quantity, 0)}
-            </p>
+            <p className="uppercase text-gray-600">Items {itemsCount}</p>
+            <p className="text-gray-800">{currency}{subtotal}</p>
           </div>
           <div className="flex justify-between">
             <p className="text-gray-600">Shipping Fee</p>
@@ -233,22 +200,11 @@ const OrderSummary = () => {
           </div>
           <div className="flex justify-between">
             <p className="text-gray-600">Tax (2%)</p>
-            <p className="font-medium text-gray-800">
-              {currency}
-              {Math.floor(
-                cartItemsFromStorage.reduce((acc, item) => acc + item.price * item.quantity, 0) * 0.02
-              )}
-            </p>
+            <p className="font-medium text-gray-800">{currency}{tax}</p>
           </div>
           <div className="flex justify-between text-lg md:text-xl font-medium border-t pt-3">
             <p>Total</p>
-            <p>
-              {currency}
-              {cartItemsFromStorage.reduce((acc, item) => acc + item.price * item.quantity, 0) +
-                Math.floor(
-                  cartItemsFromStorage.reduce((acc, item) => acc + item.price * item.quantity, 0) * 0.02
-                )}
-            </p>
+            <p>{currency}{total}</p>
           </div>
         </div>
       </div>
